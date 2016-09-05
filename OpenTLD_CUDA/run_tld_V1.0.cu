@@ -189,11 +189,11 @@ int main()
 	int SumFound_i = 0;
 	char str[15];
 	time_t start, stop;
-	float sumtime = 0.f;
 
+	start = clock();
 	while (capture.read(NextImg_cvM))
 	{
-		start = clock();
+
 		cvtColor(NextImg_cvM, NextGrayImg_cvM, CV_RGB2GRAY);
 
 
@@ -215,17 +215,10 @@ int main()
 
 		swap(CurrGrayImg_cvM, NextGrayImg_cvM);
 		//NextImg_cvM.copyTo(CurrImg_cvM);
-		stop = clock();
 
-		float time = (stop-start)/CLK_TCK;
-	
-		sumtime += time;
-		printf("the sum of time is:%.2f  this time is:%.2f\n", sumtime, time);
-		
 	}
-
-	
-	
-
+	stop = clock();
+	printf("time costs: %dms\n", (stop - start)*1000 / CLK_TCK);
+	system("pause");
 	return 0;
 }

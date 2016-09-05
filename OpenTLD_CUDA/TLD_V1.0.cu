@@ -1,4 +1,5 @@
 #include "TLD_V1.0.h"
+#include "time.h"
 
 TLD::TLD(const FileNode& file)
 {
@@ -63,6 +64,7 @@ void TLD::init_v(const Mat& FirstFrame_cvM, const Rect& box)
 	//	}
 
 	mGetGoodBadbb_v();//据Overlap分为goodbox和badbox
+	//mGetGoodBadbb_gpu();
 
 	mLastbb = mBestbb;
 
@@ -232,6 +234,7 @@ float TLD::mGetbbOverlap(const BoundingBox bb1, const BoundingBox bb2)
 	return (float)OverlapArea_f / SumArea_f;
 
 }
+
 
 void TLD::mGetGoodBadbb_v()
 {
@@ -413,25 +416,7 @@ void TLD::mGetCurrFernModel_v(const Mat& frame_cvM, bool isUpdate)
 double TLD::mGetVariance(const BoundingBox& bb)
 {
 
-	/*
-	leftup = mIntegralImg_cvM.ptr<uchar>(bb.y)[bb.x];
-	leftdown = mIntegralImg_cvM.ptr<uchar>(bb.y + bb.height)[bb.x];
-	rightup = mIntegralImg_cvM.ptr<uchar>(bb.y)[bb.x + bb.width];
-	rightdown = mIntegralImg_cvM.ptr<uchar>(bb.y + bb.height)[bb.x + bb.width];
-
-
-	Mean = (rightdown + leftup - leftdown - rightup)/((double)bb.area());
-
-	leftup = mIntegralSqImg_cvM.ptr<uchar>(bb.y)[bb.x];
-	leftdown = mIntegralSqImg_cvM.ptr<uchar>(bb.y + bb.height)[bb.x];
-	rightup = mIntegralSqImg_cvM.ptr<uchar>(bb.y)[bb.x + bb.width];
-	rightdown = mIntegralSqImg_cvM.ptr<uchar>(bb.y + bb.height)[bb.x + bb.width];
-
-
-	SqMean = (rightdown + leftup - leftdown - rightup) / ((double)bb.area());
-
-	return SqMean - Mean*Mean;  //方差=E(X^2)-(EX)^2   EX表示均值 ，概率论有这公式
-	*/
+	
 	double leftup, leftdown, rightup, rightdown;
 	double Mean;
 	double SqMean;
@@ -675,8 +660,8 @@ void TLD::mtrack_v(const Mat& CurrFrame_con_cvM, const Mat& NextFrame_con_cvM)
 		BoundingBox bb;
 		bb.x = max(mTrackbb.x, 0);
 		bb.y = max(mTrackbb.y, 0);
-		bb.width = min(mTrackbb.width, NextFrame_con_cvM.cols - mTrackbb.x);
-		bb.height = min(mTrackbb.height, NextFrame_con_cvM.rows - mTrackbb.y);
+		bb.width = min(min(NextFrame_con_cvM.cols - mTrackbb.x, mTrackbb.width), min(mTrackbb.width, mTrackbb.br().x));
+		bb.height = min(min(NextFrame_con_cvM.rows - mTrackbb.y, mTrackbb.height), min(mTrackbb.height, mTrackbb.br().y));
 
 
 		Scalar stdDev;
@@ -689,7 +674,8 @@ void TLD::mtrack_v(const Mat& CurrFrame_con_cvM, const Mat& NextFrame_con_cvM)
 
 		mIsTrackValid_b = mIsLastValid_b;
 		//	if (mTrackedCconf>mthrTrackValid)//0.7
-		if (mTrackedCconf>mthrTrackValid)//0.65
+		//if (mTrackedCconf>mthrTrackValid)//0.65
+		if (mTrackedCconf>0.6)
 		{
 			mIsTrackValid_b = true;
 		}
@@ -848,7 +834,9 @@ void TLD::mlearn_v(const Mat& NextFrame_con_cvM)
 		mGetAllbbOverlap_gpu(Nextbb);
 	}
 
-	mGetGoodBadbb_v();//得到goodbox和badbox
+	//mGetGoodBadbb_v();//得到goodbox和badbox
+
+	mGetGoodBadbb_gpu();
 
 	if (mGoodbb_i_vt.size()>0)
 	{
@@ -895,7 +883,7 @@ void TLD::mlearn_v(const Mat& NextFrame_con_cvM)
 bool SortBB(const BoundingBox& b1, const BoundingBox& b2)
 {
 	TLD t;
-	if (t.mGetbbOverlap(b1, b1) < 0.5)
+	if (t.mGetbbOverlap(b1, b2) < 0.5)
 	{
 		return false;
 	}
@@ -937,7 +925,8 @@ void TLD::mCluster(const vector<BoundingBox>& Detectbb, const vector<float>& Det
 
 	for (int i = 0; i < categoryNum_i; i++)
 	{
-		N = 0;
+		int N = 0, mx = 0, my = 0, mw = 0, mh = 0;
+		float cnf = 0.f;
 		for (int j = 0; j < categoryIdx_i_vt.size(); j++)
 		{
 			if (i == categoryIdx_i_vt[j])
@@ -947,16 +936,17 @@ void TLD::mCluster(const vector<BoundingBox>& Detectbb, const vector<float>& Det
 				Clusterbb[i].width += Detectbb[j].width;
 				Clusterbb[i].height += Detectbb[j].height;
 				ClusterbbCconf[i] += DetectbbCconf[j];
+				cnf += DetectbbCconf[j];
 				N++;
 			}
 		}
 		if (N > 0)
 		{
-			Clusterbb[i].x = round(Clusterbb[i].x / N);
-			Clusterbb[i].y = round(Clusterbb[i].y / N);
-			Clusterbb[i].width = round(Clusterbb[i].width / N);
-			Clusterbb[i].height = round(Clusterbb[i].height / N);
-			ClusterbbCconf[i] /= N;
+			Clusterbb[i].x = round(mx / N);
+			Clusterbb[i].y = round(my / N);
+			Clusterbb[i].width = round(mw / N);
+			Clusterbb[i].height = round(mh / N);
+			ClusterbbCconf[i] = cnf / N;
 		}
 	}
 
@@ -988,6 +978,7 @@ bool TLD::mCudaInit()
 	return true;
 }
 
+
 __global__ void GetbbOverlap_kernel(int GridSize, BoundingBox* p)
 {
 
@@ -1015,6 +1006,7 @@ __global__ void GetbbOverlap_kernel(int GridSize, BoundingBox* p)
 
 		p[idx].overlap = (float)OverlapArea_f / SumArea_f;
 		//printf("%f\n", p[idx].overlap);
+		__syncthreads();
 	}
 
 }
@@ -1034,5 +1026,86 @@ void TLD::mGetAllbbOverlap_gpu(BoundingBox CurrBox)
 	cudaMemcpy(mGrid_ptr, p, sizeof(BoundingBox)* mGridSize_i, cudaMemcpyDeviceToHost);
 
 	cudaFree(p);
+}
+
+__global__ void GetGoodBadbb_kernel(int *mBB,int Size, int thrGood, int thrBad, int best_overlap,BoundingBox* grid)
+{
+	int idx = blockDim.x*blockIdx.x + threadIdx.x;
+	mBB[idx] = -1;
+	if (idx < Size)
+	{
+		if (grid[idx].overlap>best_overlap)//找出重叠度最高的bb
+		{
+			mBB[idx] = 2;
+		}
+
+		if (grid[idx].overlap > thrGood)//找出重叠度达到好的要求的bb编号，阈值0.6
+		{
+			mBB[idx] = 1;
+		}
+		else if (grid[idx].overlap < thrBad)//找出重叠度达到坏的要求的bb编号，阈值0.2
+		{
+			mBB[idx] = 0;
+		}
+	}
+	if (mBB[idx]>= 2)
+	{
+		printf("*****%d\t", idx);
+	}
+	__syncthreads();
+	//printf("%d : %d\n", idx, mBB[idx]);
+}
+
+void TLD::mGetGoodBadbb_gpu()
+{
+	BoundingBox best, *grid;
+	int *result = new int[mGridSize_i];
+	int *mBB = new int[mGridSize_i];
+	best.overlap = 0;
+	cudaMalloc((void**)&best, sizeof(BoundingBox));
+	cudaMalloc((void**)&grid, sizeof(BoundingBox)*mGridSize_i);
+	cudaMalloc((void**)&mBB, sizeof(int)*mGridSize_i);
+
+	cudaMemcpy(grid, mGrid_ptr, sizeof(BoundingBox)* mGridSize_i, cudaMemcpyHostToDevice);
+
+	GetGoodBadbb_kernel << <(int)ceil(mGridSize_i/ 512), 512 >> >(mBB, mGridSize_i, mthrGoodOverlap_f, mthrBadOverlap_f, best.overlap, grid);
+
+	cudaMemcpy(result, mBB, sizeof(int)* mGridSize_i, cudaMemcpyDeviceToHost);
+	cudaMemcpy(&mBestbb, &best, sizeof(BoundingBox), cudaMemcpyDeviceToHost);
+
+	cudaFree(&best);
+	cudaFree(grid);
+	cudaFree(mBB);
+
+	for (int i = 0; i < mGridSize_i; i++)
+	{
+		switch (result[i])
+		{
+		case 0:
+			mBadbb_i_vt.push_back(i);
+			break;
+		case 1:
+			mGoodbb_i_vt.push_back(i);
+			break;
+		case 2:
+			cout << result[i] << "(" << i << ")" << " ";
+			system("pause");
+			mBestbb = mGrid_ptr[i];
+			break;
+		}
+	}
+
+	printf("Best Box: %d %d %d %d\n", mBestbb.x, mBestbb.y, mBestbb.width, mBestbb.height);
+
+	if (mGoodbb_i_vt.size() > mMaxGoodbbNum_i)//保留重叠度最大的10个
+	{
+		//使goodbb数目不超过最大限制
+		nth_element(mGoodbb_i_vt.begin(), mGoodbb_i_vt.begin() + mMaxGoodbbNum_i, mGoodbb_i_vt.end(), OComparator(mGrid_ptr));
+		mGoodbb_i_vt.resize(mMaxGoodbbNum_i);
+	}
+
+	mGetGoodbbHull_v();//获得框住所有box的矩形
+
+	delete[] result;
 }
 

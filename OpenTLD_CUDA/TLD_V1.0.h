@@ -108,6 +108,8 @@ public:
 	bool mCudaInit();
 
 	void mGetAllbbOverlap_gpu(BoundingBox CurrBox);
+
+	void mGetGoodBadbb_gpu();
 private:
 
 	bool mIsLastValid_b;//”√¿¥≈–∂œ «∑Ò—µ¡∑
